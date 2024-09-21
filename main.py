@@ -1,8 +1,8 @@
 import sys
 import cv2
 import numpy as np
-from PyQt5.QtWidgets import QApplication, QWidget, QVBoxLayout, QPushButton, QLabel, QListWidget, QCheckBox, QRubberBand
-from PyQt5.QtCore import QTimer, Qt, QThread, pyqtSignal, QRect, QPoint, QSize
+from PyQt5.QtWidgets import QApplication, QWidget, QVBoxLayout, QPushButton, QLabel, QListWidget, QCheckBox, QRubberBand, QListWidgetItem
+from PyQt5.QtCore import QTimer, Qt, QThread, pyqtSignal, QRect, QPoint, QSize, QElapsedTimer
 from PyQt5.QtGui import QFont, QPainter, QPen, QColor
 import ctypes
 import pyautogui
@@ -43,19 +43,24 @@ class ScreenMonitor(QThread):
         previous_color = None
 
         while self.running:
-            screenshot = pyautogui.screenshot(region=self.region)
-            frame = np.array(screenshot)
-            frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+            try:
+                screenshot = pyautogui.screenshot(region=self.region)
+                frame = np.array(screenshot)
+                if frame.size == 0:
+                    raise ValueError("Empty frame captured")
+                frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
 
-            # 특정 영역의 평균 색상 계산
-            current_color = cv2.mean(frame)[:3]
+                # 특정 영역의 평균 색상 계산
+                current_color = cv2.mean(frame)[:3]
 
-            if previous_color is not None:
-                # 색상 변화 감지
-                if np.linalg.norm(np.array(current_color) - np.array(previous_color)) > 50:
-                    self.color_changed.emit(current_color)
+                if previous_color is not None:
+                    # 색상 변화 감지
+                    if np.linalg.norm(np.array(current_color) - np.array(previous_color)) > 50:
+                        self.color_changed.emit(current_color)
 
-            previous_color = current_color
+                previous_color = current_color
+            except Exception as e:
+                print(f"Error capturing screenshot: {e}")
             self.msleep(100)  # 100ms마다 화면을 모니터링
 
     def stop(self):
@@ -115,6 +120,7 @@ class TimerApp(QWidget):
         
         self.timer = QTimer(self)
         self.timer.timeout.connect(self.update_timer)
+        self.elapsed_timer = QElapsedTimer()
         self.elapsed_time = 0  # 경과 시간 (초)
         self.lap_times = []  # 랩 타임 저장
         self.is_running = False  # 타이머 상태
@@ -162,23 +168,35 @@ class TimerApp(QWidget):
     def toggle_timer(self):
         if self.is_running:
             self.timer.stop()
+            self.elapsed_time += self.elapsed_timer.elapsed() / 1000.0  # 밀리초를 초로 변환
             self.start_stop_button.setText('Start')
         else:
+            self.elapsed_timer.start()
             self.timer.start(10)  # 10ms마다 timeout 신호 발생 (100분의 1초)
             self.start_stop_button.setText('Stop')
         self.is_running = not self.is_running
 
     def update_timer(self):
-        self.elapsed_time += 0.01  # 0.01초 증가
-        minutes, seconds = divmod(int(self.elapsed_time), 60)
-        milliseconds = int((self.elapsed_time - int(self.elapsed_time)) * 100)
+        current_time = self.elapsed_time + self.elapsed_timer.elapsed() / 1000.0  # 밀리초를 초로 변환
+        minutes, seconds = divmod(int(current_time), 60)
+        milliseconds = int((current_time - int(current_time)) * 100)
         self.label.setTextWithFlip(f"{minutes:02}:{seconds:02}.{milliseconds:02}")
 
-    def record_lap(self):
-        if self.elapsed_time > 0:
-            lap_time = self.label.text()
-            self.lap_times.append(lap_time)
-            self.lap_list.addItem(lap_time)
+    def record_lap(self, color=None):
+        current_time = self.elapsed_time + self.elapsed_timer.elapsed() / 1000.0  # 밀리초를 초로 변환
+        minutes, seconds = divmod(int(current_time), 60)
+        milliseconds = int((current_time - int(current_time)) * 100)
+        lap_time = f"{minutes:02}:{seconds:02}.{milliseconds:02}"
+        self.lap_times.append((lap_time, color))
+        item_text = lap_time
+        if color:
+            int_color = tuple(map(int, color))  # float 값을 int로 변환
+            item_text += f" - Color: {int_color}"
+            item = QListWidgetItem(item_text)
+            item.setBackground(QColor(int_color[0], int_color[1], int_color[2]))
+        else:
+            item = QListWidgetItem(item_text)
+        self.lap_list.addItem(item)
 
     def reset_timer(self):
         self.timer.stop()
@@ -221,12 +239,13 @@ class TimerApp(QWidget):
         self.overlay = Overlay(region)
         self.monitor_thread = ScreenMonitor(self.monitor_region)
         self.monitor_thread.color_changed.connect(self.update_color_label)
-        self.monitor_thread.color_changed.connect(self.record_lap)
+        self.monitor_thread.color_changed.connect(lambda color: self.record_lap(color))
         self.monitor_thread.start()
         self.monitoring = True
 
     def update_color_label(self, color):
-        self.color_label.setText(f"Current Color: {color}")
+        int_color = tuple(map(int, color))  # float 값을 int로 변환
+        self.color_label.setText(f"Current Color: {int_color}")
 
 if __name__ == '__main__':
     app = QApplication(sys.argv)
